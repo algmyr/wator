@@ -76,16 +76,10 @@ enum Content {
 }
 
 impl Content {
-  fn is_empty(&self) -> bool {
-    *self as u8 == 0
-  }
-  fn is_fish(&self) -> bool {
-    *self as u8 & 1 != 0
-  }
+  fn is_empty(&self) -> bool { *self as u8 == 0 }
+  fn is_fish(&self) -> bool { *self as u8 & 1 != 0 }
   #[allow(unused)]
-  fn is_shark(&self) -> bool {
-    *self as u8 & 2 != 0
-  }
+  fn is_shark(&self) -> bool { *self as u8 & 2 != 0 }
 }
 
 struct Board {
@@ -120,6 +114,38 @@ fn clear_by_cond<T: Copy>(
     }
   }
   removed
+}
+
+const DIRECTIONS: [[(isize, isize); 4]; 24] = [
+  [(-1, 0), (1, 0), (0, -1), (0, 1)],
+  [(-1, 0), (1, 0), (0, 1), (0, -1)],
+  [(-1, 0), (0, -1), (1, 0), (0, 1)],
+  [(-1, 0), (0, -1), (0, 1), (1, 0)],
+  [(-1, 0), (0, 1), (1, 0), (0, -1)],
+  [(-1, 0), (0, 1), (0, -1), (1, 0)],
+  [(1, 0), (-1, 0), (0, -1), (0, 1)],
+  [(1, 0), (-1, 0), (0, 1), (0, -1)],
+  [(1, 0), (0, -1), (-1, 0), (0, 1)],
+  [(1, 0), (0, -1), (0, 1), (-1, 0)],
+  [(1, 0), (0, 1), (-1, 0), (0, -1)],
+  [(1, 0), (0, 1), (0, -1), (-1, 0)],
+  [(0, -1), (-1, 0), (1, 0), (0, 1)],
+  [(0, -1), (-1, 0), (0, 1), (1, 0)],
+  [(0, -1), (1, 0), (-1, 0), (0, 1)],
+  [(0, -1), (1, 0), (0, 1), (-1, 0)],
+  [(0, -1), (0, 1), (-1, 0), (1, 0)],
+  [(0, -1), (0, 1), (1, 0), (-1, 0)],
+  [(0, 1), (-1, 0), (1, 0), (0, -1)],
+  [(0, 1), (-1, 0), (0, -1), (1, 0)],
+  [(0, 1), (1, 0), (-1, 0), (0, -1)],
+  [(0, 1), (1, 0), (0, -1), (-1, 0)],
+  [(0, 1), (0, -1), (-1, 0), (1, 0)],
+  [(0, 1), (0, -1), (1, 0), (-1, 0)],
+];
+
+fn random_dir() -> &'static [(isize, isize)] {
+  let rng = &mut rand::thread_rng();
+  DIRECTIONS.choose(rng).unwrap()
 }
 
 struct World {
@@ -169,16 +195,13 @@ impl World {
   }
 
   fn update(&mut self) {
-    let rng = &mut rand::thread_rng();
-    let mut directions = [(-1, 0), (1, 0), (0, -1), (0, 1)];
-
     let mut new_fishes = vec![];
     for fish in &mut self.fishes {
-      directions.shuffle(rng);
+      let directions = random_dir();
       let start = fish.pos;
 
       // Move.
-      for (dx, dy) in directions {
+      for &(dx, dy) in directions {
         if self.occupied.get(fish.pos.offset(dx, dy)).is_empty() {
           *self.occupied.get_mut(fish.pos) = Content::Empty;
           fish.pos = fish.pos.offset(dx, dy);
@@ -199,14 +222,14 @@ impl World {
     }
     self.fishes.extend(new_fishes);
 
-    let mut fishes_to_remove = std::collections::HashSet::new();
+    let mut fishes_to_remove = ahash::AHashSet::new();
     let mut new_sharks = vec![];
     for shark in &mut self.sharks {
-      directions.shuffle(rng);
+      let directions = random_dir();
       let start = shark.pos;
 
       // Eat.
-      for (dx, dy) in directions {
+      for &(dx, dy) in directions {
         if self.occupied.get(shark.pos.offset(dx, dy)).is_fish() {
           fishes_to_remove.insert(shark.pos.offset(dx, dy));
           shark.starve = 0;
@@ -219,7 +242,7 @@ impl World {
 
       // Move if not already moved.
       if start == shark.pos {
-        for (dx, dy) in directions {
+        for &(dx, dy) in directions {
           if self.occupied.get(shark.pos.offset(dx, dy)).is_empty() {
             *self.occupied.get_mut(shark.pos) = Content::Empty;
             shark.pos = shark.pos.offset(dx, dy);
@@ -273,12 +296,12 @@ impl Sim {
       let p = Point::from_ix(i);
 
       let rgba = match self.world.occupied.get(p) {
-        Content::Empty    => [0x00, 0x00, 0x00, 0xff],
+        Content::Empty => [0x00, 0x00, 0x00, 0xff],
 
-        Content::Fish     => [0x00, 0x99, 0x00, 0xff],
-        Content::NewFish  => [0x00, 0xff, 0x00, 0xff],
+        Content::Fish => [0x00, 0x99, 0x00, 0xff],
+        Content::NewFish => [0x00, 0xff, 0x00, 0xff],
 
-        Content::Shark    => [0xff, 0x00, 0x00, 0xff],
+        Content::Shark => [0xff, 0x00, 0x00, 0xff],
         Content::NewShark => [0xff, 0xff, 0xff, 0xff],
         Content::FedShark => [0xff, 0xff, 0x00, 0xff],
       };
@@ -309,7 +332,6 @@ fn main() -> Result<(), Error> {
   };
   let mut sim = Sim::new();
 
-  let mut i = 0;
   event_loop.run(move |event, _, control_flow| {
     // Draw the current frame
     if let Event::RedrawRequested(_) = event {
@@ -321,12 +343,6 @@ fn main() -> Result<(), Error> {
       sim.update();
       sim.draw(pixels.get_frame_mut());
       window.request_redraw();
-
-      i += 1;
-      //if i == 1000 {
-      //  *control_flow = ControlFlow::Exit;
-      //  return;
-      //}
     }
 
     // Handle input events
