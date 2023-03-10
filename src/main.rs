@@ -42,11 +42,11 @@ struct Fish {
 }
 
 struct Board {
-  data: [u8; WIDTH * HEIGHT],
+  data: Vec<u8>,
 }
 
 impl Board {
-  fn new() -> Self { Self { data: [0; WIDTH * HEIGHT] } }
+  fn new() -> Self { Self { data: vec![0; WIDTH * HEIGHT] } }
 
   fn get(&self, p: Point) -> u8 {
     let ix = p.y.rem_euclid(HEIGHT as isize) as usize* WIDTH + p.x.rem_euclid(WIDTH as isize) as usize;
