@@ -19,16 +19,25 @@ struct Point {
   y: isize,
 }
 
+fn nudge_into_range(x: isize, m: isize) -> isize {
+  if x < 0 {
+    x + m
+  } else if x >= m {
+    x - m
+  } else {
+    x
+  }
+}
+
 impl Point {
   fn from_ix(ix: usize) -> Self {
     Self { x: (ix % WIDTH) as isize, y: (ix / WIDTH) as isize }
   }
 
   fn offset(&self, dx: isize, dy: isize) -> Point {
-    Point {
-      x: (self.x + dx).rem_euclid(WIDTH as isize),
-      y: (self.y + dy).rem_euclid(HEIGHT as isize),
-    }
+    let x = nudge_into_range(self.x + dx, WIDTH as isize);
+    let y = nudge_into_range(self.y + dy, HEIGHT as isize);
+    Point { x, y }
   }
 }
 
@@ -39,30 +48,78 @@ struct Shark {
   starve: TimeType,
 }
 
+impl Shark {
+  fn new(pos: Point) -> Self { Self { pos, repro_time: 0, starve: 0 } }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct Fish {
   pos: Point,
   repro_time: TimeType,
 }
 
+impl Fish {
+  fn new(pos: Point) -> Self { Self { pos, repro_time: 0 } }
+}
+
+#[repr(u8)]
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum Content {
+  Empty = 0,
+
+  Fish = 1,
+  NewFish = 1 | 4,
+
+  Shark = 2,
+  NewShark = 2 | 4,
+  FedShark = 2 | 8,
+}
+
+impl Content {
+  fn is_empty(&self) -> bool {
+    *self as u8 == 0
+  }
+  fn is_fish(&self) -> bool {
+    *self as u8 & 1 != 0
+  }
+  #[allow(unused)]
+  fn is_shark(&self) -> bool {
+    *self as u8 & 2 != 0
+  }
+}
+
 struct Board {
-  data: Vec<u8>,
+  data: Vec<Content>,
 }
 
 impl Board {
-  fn new() -> Self { Self { data: vec![0; WIDTH * HEIGHT] } }
+  fn new() -> Self { Self { data: vec![Content::Empty; WIDTH * HEIGHT] } }
 
-  fn get(&self, p: Point) -> u8 {
-    let ix = p.y.rem_euclid(HEIGHT as isize) as usize * WIDTH
-      + p.x.rem_euclid(WIDTH as isize) as usize;
+  fn get(&self, p: Point) -> Content {
+    let ix = p.y as usize * WIDTH + p.x as usize;
     self.data[ix]
   }
 
-  fn get_mut(&mut self, p: Point) -> &mut u8 {
-    let ix = p.y.rem_euclid(HEIGHT as isize) as usize * WIDTH
-      + p.x.rem_euclid(WIDTH as isize) as usize;
+  fn get_mut(&mut self, p: Point) -> &mut Content {
+    let ix = p.y as usize * WIDTH + p.x as usize;
     &mut self.data[ix]
   }
+}
+
+fn clear_by_cond<T: Copy>(
+  vec: &mut Vec<T>,
+  should_remove: impl Fn(&T) -> bool,
+) -> Vec<T> {
+  let mut i = 0;
+  let mut removed = vec![];
+  while i < vec.len() {
+    if should_remove(&vec[i]) {
+      removed.push(vec.swap_remove(i));
+    } else {
+      i += 1;
+    }
+  }
+  removed
 }
 
 struct World {
@@ -93,7 +150,7 @@ impl World {
     for ix in indices.by_ref().take(n_fish) {
       let fish =
         Fish { pos: Point::from_ix(ix), repro_time: rng.gen_range(1..=fish_repro_time) };
-      *occupied.get_mut(fish.pos) = 1;
+      *occupied.get_mut(fish.pos) = Content::Fish;
       fishes.push(fish);
     }
 
@@ -104,7 +161,7 @@ impl World {
         repro_time: rng.gen_range(1..=shark_repro_time as u8),
         starve: 0,
       };
-      *occupied.get_mut(shark.pos) = 2;
+      *occupied.get_mut(shark.pos) = Content::Shark;
       sharks.push(shark);
     }
 
@@ -122,21 +179,21 @@ impl World {
 
       // Move.
       for (dx, dy) in directions {
-        if self.occupied.get(fish.pos.offset(dx, dy)) == 0 {
-          *self.occupied.get_mut(fish.pos) = 0;
+        if self.occupied.get(fish.pos.offset(dx, dy)).is_empty() {
+          *self.occupied.get_mut(fish.pos) = Content::Empty;
           fish.pos = fish.pos.offset(dx, dy);
-          *self.occupied.get_mut(fish.pos) = 1;
+          *self.occupied.get_mut(fish.pos) = Content::Fish;
           break;
         }
       }
 
-      // Breed.
+      // Breed if moved.
       if start != fish.pos {
         fish.repro_time += 1;
         if fish.repro_time >= self.fish_repro_time {
           fish.repro_time = 0;
-          new_fishes.push(Fish { pos: start, repro_time: 0 });
-          *self.occupied.get_mut(start) = 1;
+          new_fishes.push(Fish::new(start));
+          *self.occupied.get_mut(start) = Content::NewFish;
         }
       }
     }
@@ -150,15 +207,12 @@ impl World {
 
       // Eat.
       for (dx, dy) in directions {
-        if self.occupied.get(shark.pos.offset(dx, dy)) == 1 {
+        if self.occupied.get(shark.pos.offset(dx, dy)).is_fish() {
           fishes_to_remove.insert(shark.pos.offset(dx, dy));
-          //if let Some(ix) = self.fishes.iter().position(|fish| fish.pos == shark.pos.offset(dx, dy)) {
-          //  self.fishes.swap_remove(ix);
-          //}
           shark.starve = 0;
-          *self.occupied.get_mut(shark.pos) = 0;
+          *self.occupied.get_mut(shark.pos) = Content::Empty;
           shark.pos = shark.pos.offset(dx, dy);
-          *self.occupied.get_mut(shark.pos) = 2;
+          *self.occupied.get_mut(shark.pos) = Content::FedShark;
           break;
         }
       }
@@ -166,22 +220,22 @@ impl World {
       // Move if not already moved.
       if start == shark.pos {
         for (dx, dy) in directions {
-          if self.occupied.get(shark.pos.offset(dx, dy)) == 0 {
-            *self.occupied.get_mut(shark.pos) = 0;
+          if self.occupied.get(shark.pos.offset(dx, dy)).is_empty() {
+            *self.occupied.get_mut(shark.pos) = Content::Empty;
             shark.pos = shark.pos.offset(dx, dy);
-            *self.occupied.get_mut(shark.pos) = 2;
+            *self.occupied.get_mut(shark.pos) = Content::Shark;
             break;
           }
         }
       }
 
-      // Breed.
+      // Breed if moved.
       if start != shark.pos {
         shark.repro_time += 1;
         if shark.repro_time == self.shark_repro_time {
           shark.repro_time = 0;
-          new_sharks.push(Shark { pos: start, repro_time: 0, starve: 0 });
-          *self.occupied.get_mut(start) = 2;
+          new_sharks.push(Shark::new(start));
+          *self.occupied.get_mut(start) = Content::NewShark;
         }
       }
 
@@ -190,30 +244,15 @@ impl World {
     self.sharks.extend(new_sharks);
 
     // Clear eaten fish.
-    {
-      let mut i = 0;
-      for j in 0..self.fishes.len() {
-        if fishes_to_remove.contains(&self.fishes[j].pos) {
-        } else {
-          self.fishes[i] = self.fishes[j];
-          i += 1;
-        }
-      }
-      self.fishes.drain(i..);
-    }
+    clear_by_cond(&mut self.fishes, |&fish| {
+      fishes_to_remove.contains(&fish.pos)
+    });
 
     // Kill starved sharks.
-    {
-      let mut i = 0;
-      for j in 0..self.sharks.len() {
-        if self.sharks[j].starve >= self.shark_starves {
-          *self.occupied.get_mut(self.sharks[j].pos) = 0;
-        } else {
-          self.sharks[i] = self.sharks[j];
-          i += 1;
-        }
-      }
-      self.sharks.drain(i..);
+    for rem in clear_by_cond(&mut self.sharks, |&shark| {
+      shark.starve >= self.shark_starves
+    }) {
+      *self.occupied.get_mut(rem.pos) = Content::Empty;
     }
   }
 }
@@ -234,9 +273,14 @@ impl Sim {
       let p = Point::from_ix(i);
 
       let rgba = match self.world.occupied.get(p) {
-        1 => [0x00, 0xff, 0x00, 0xff], // Fish
-        2 => [0xff, 0x00, 0x00, 0xff], // Shark
-        _ => [0x00, 0x00, 0x00, 0x00],
+        Content::Empty    => [0x00, 0x00, 0x00, 0xff],
+
+        Content::Fish     => [0x00, 0x99, 0x00, 0xff],
+        Content::NewFish  => [0x00, 0xff, 0x00, 0xff],
+
+        Content::Shark    => [0xff, 0x00, 0x00, 0xff],
+        Content::NewShark => [0xff, 0xff, 0xff, 0xff],
+        Content::FedShark => [0xff, 0xff, 0x00, 0xff],
       };
 
       pixel.copy_from_slice(&rgba);
@@ -265,6 +309,7 @@ fn main() -> Result<(), Error> {
   };
   let mut sim = Sim::new();
 
+  let mut i = 0;
   event_loop.run(move |event, _, control_flow| {
     // Draw the current frame
     if let Event::RedrawRequested(_) = event {
@@ -276,6 +321,12 @@ fn main() -> Result<(), Error> {
       sim.update();
       sim.draw(pixels.get_frame_mut());
       window.request_redraw();
+
+      i += 1;
+      //if i == 1000 {
+      //  *control_flow = ControlFlow::Exit;
+      //  return;
+      //}
     }
 
     // Handle input events
